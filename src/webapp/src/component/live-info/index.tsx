@@ -1,7 +1,11 @@
 import React from "react";
 import API from '../../utils/api';
-import { PageHeader } from 'antd';
-import { Descriptions } from 'antd';
+import {
+    PageHeader,
+    Descriptions,
+    Button
+} from 'antd';
+import copy from 'copy-to-clipboard';
 
 const api = new API();
 
@@ -47,6 +51,21 @@ class LiveInfo extends React.Component<Props, IState> {
                     goVersion: rsp.go_version
                 })
             })
+            .catch(err => {
+                alert("请求服务器失败");
+            })
+    }
+
+    getTextForCopy(): string {
+        return `
+App Name: ${this.state.appVersion}
+App Version: ${this.state.appVersion}
+Build Time: ${this.state.buildTime}
+Pid: ${this.state.pid}
+Platform: ${this.state.platform}
+Go Version: ${this.state.goVersion}
+Git Hash: ${this.state.gitHash}
+`;
     }
 
     render() {
@@ -68,7 +87,24 @@ class LiveInfo extends React.Component<Props, IState> {
                     <Descriptions.Item label="Go Version">{this.state.goVersion}</Descriptions.Item>
                     <Descriptions.Item label="Git Hash">{this.state.gitHash}</Descriptions.Item>
                 </Descriptions>
-            </div>
+                <Button
+                    type="default"
+                    style={{
+                        marginTop: 16,
+                    }}
+                    onClick={() => {
+                        const text = this.getTextForCopy();
+                        const result = copy(text);
+                        if (result) {
+                            alert("复制成功:" + text);
+                        } else {
+                            alert(`复制失败`);
+                        }
+                    }}
+                >
+                    复制到剪贴板
+                </Button>
+            </div >
         )
     }
 }

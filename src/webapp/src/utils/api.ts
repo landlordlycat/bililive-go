@@ -73,7 +73,7 @@ class API {
     /**
      * 保存设置至config文件，且不处理返回结果
      */
-    saveSettingsInBackground(){
+    saveSettingsInBackground() {
         this.saveSettings()
             .then((rsp: any) => {
                 if (rsp.err_no === 0) {
@@ -82,8 +82,33 @@ class API {
                     console.log('Server Error !!');
                 }
             })
+            .catch(err => {
+                alert(`保存设置失败:\n${err}`);
+            })
     }
 
+    /**
+     * 获取设置明文
+     */
+    getConfigInfo() {
+        return utils.requestGet(`${BASE_URL}/raw-config`);
+    }
+
+    /**
+     * 保存设置明文
+     * @param json \{config: "yaml格式的设置原文"\}
+     */
+    saveRawConfig(json: any) {
+        return utils.requestPut(`${BASE_URL}/raw-config`, json);
+    }
+
+    /**
+     *
+     * @param path 获取文件目录
+     */
+    getFileList(path: string = "") {
+        return utils.requestGet(`${BASE_URL}/file/${path}`);
+    }
 }
 
 export default API;

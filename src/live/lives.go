@@ -13,7 +13,8 @@ import (
 )
 
 var (
-	m = make(map[string]Builder)
+	m                               = make(map[string]Builder)
+	InitializingLiveBuilderInstance InitializingLiveBuilder
 )
 
 func Register(domain string, b Builder) {
@@ -29,8 +30,20 @@ type Builder interface {
 	Build(*url.URL, ...Option) (Live, error)
 }
 
+type InitializingLiveBuilder interface {
+	Build(Live, *url.URL, ...Option) (Live, error)
+}
+
+type InitializingFinishedParam struct {
+	InitializingLive Live
+	Live             Live
+	Info             *Info
+}
+
 type Options struct {
-	Cookies *cookiejar.Jar
+	Cookies   *cookiejar.Jar
+	Quality   int
+	AudioOnly bool
 }
 
 func NewOptions(opts ...Option) (*Options, error) {
@@ -38,7 +51,7 @@ func NewOptions(opts ...Option) (*Options, error) {
 	if err != nil {
 		return nil, err
 	}
-	options := &Options{Cookies: cookieJar}
+	options := &Options{Cookies: cookieJar, Quality: 0}
 	for _, opt := range opts {
 		opt(options)
 	}
@@ -72,33 +85,60 @@ func WithKVStringCookies(u *url.URL, cookies string) Option {
 	}
 }
 
+func WithQuality(quality int) Option {
+	return func(opts *Options) {
+		opts.Quality = quality
+	}
+}
+
+func WithAudioOnly(audioOnly bool) Option {
+	return func(opts *Options) {
+		opts.AudioOnly = audioOnly
+	}
+}
+
 type ID string
 
+type StreamUrlInfo struct {
+	Url                  *url.URL
+	Name                 string
+	Description          string
+	Resolution           int
+	Vbitrate             int
+	HeadersForDownloader map[string]string
+}
+
 type Live interface {
+	SetLiveIdByString(string)
 	GetLiveId() ID
 	GetRawUrl() string
 	GetInfo() (*Info, error)
+	// Deprecated: GetStreamUrls is deprecated, using GetStreamInfos instead
 	GetStreamUrls() ([]*url.URL, error)
+	GetStreamInfos() ([]*StreamUrlInfo, error)
 	GetPlatformCNName() string
 	GetLastStartTime() time.Time
 	SetLastStartTime(time.Time)
 }
 
-type wrappedLive struct {
+type WrappedLive struct {
 	Live
 	cache gcache.Cache
 }
 
 func newWrappedLive(live Live, cache gcache.Cache) Live {
-	return &wrappedLive{
+	return &WrappedLive{
 		Live:  live,
 		cache: cache,
 	}
 }
 
-func (w *wrappedLive) GetInfo() (*Info, error) {
+func (w *WrappedLive) GetInfo() (*Info, error) {
 	i, err := w.Live.GetInfo()
 	if err != nil {
+		if info, err2 := w.cache.Get(w); err2 == nil {
+			info.(*Info).RoomName = err.Error()
+		}
 		return nil, err
 	}
 	if w.cache != nil {
@@ -118,10 +158,19 @@ func New(url *url.URL, cache gcache.Cache, opts ...Option) (live Live, err error
 	}
 	live = newWrappedLive(live, cache)
 	for i := 0; i < 3; i++ {
-		if _, err = live.GetInfo(); err == nil {
-			break
+		var info *Info
+		if info, err = live.GetInfo(); err == nil {
+			if info.CustomLiveId != "" {
+				live.SetLiveIdByString(info.CustomLiveId)
+			}
+			return
 		}
 		time.Sleep(1 * time.Second)
 	}
+
+	// when room initializaion is failed
+	live, err = InitializingLiveBuilderInstance.Build(live, url, opts...)
+	live = newWrappedLive(live, cache)
+	live.GetInfo() // dummy call to initialize cache inside wrappedLive
 	return
 }

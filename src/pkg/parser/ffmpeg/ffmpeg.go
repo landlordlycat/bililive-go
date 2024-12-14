@@ -3,15 +3,19 @@ package ffmpeg
 import (
 	"bufio"
 	"bytes"
+	"context"
+	"fmt"
 	"io"
-	"net/url"
 	"os"
 	"os/exec"
+	"strconv"
 	"sync"
 	"time"
 
+	"github.com/hr3lxphr6j/bililive-go/src/instance"
 	"github.com/hr3lxphr6j/bililive-go/src/live"
 	"github.com/hr3lxphr6j/bililive-go/src/pkg/parser"
+	"github.com/hr3lxphr6j/bililive-go/src/pkg/utils"
 )
 
 const (
@@ -32,22 +36,25 @@ func (b *builder) Build(cfg map[string]string) (parser.Parser, error) {
 		debug = true
 	}
 	return &Parser{
-		debug:      debug,
-		closeOnce:  new(sync.Once),
-		statusReq:  make(chan struct{}, 1),
-		statusResp: make(chan map[string]string, 1),
+		debug:       debug,
+		closeOnce:   new(sync.Once),
+		statusReq:   make(chan struct{}, 1),
+		statusResp:  make(chan map[string]string, 1),
+		timeoutInUs: cfg["timeout_in_us"],
 	}, nil
 }
 
 type Parser struct {
-	cmd       *exec.Cmd
-	cmdStdIn  io.WriteCloser
-	cmdStdout io.ReadCloser
-	closeOnce *sync.Once
-	debug     bool
+	cmd         *exec.Cmd
+	cmdStdIn    io.WriteCloser
+	cmdStdout   io.ReadCloser
+	closeOnce   *sync.Once
+	debug       bool
+	timeoutInUs string
 
 	statusReq  chan struct{}
 	statusResp chan map[string]string
+	cmdLock    sync.Mutex
 }
 
 func (p *Parser) scanFFmpegStatus() <-chan []byte {
@@ -118,43 +125,97 @@ func (p *Parser) Status() (map[string]string, error) {
 	return <-p.statusResp, nil
 }
 
-func (p *Parser) ParseLiveStream(url *url.URL, live live.Live, file string) (err error) {
-	p.cmd = exec.Command(
-		"ffmpeg",
+func (p *Parser) ParseLiveStream(ctx context.Context, streamUrlInfo *live.StreamUrlInfo, live live.Live, file string) (err error) {
+	url := streamUrlInfo.Url
+	ffmpegPath, err := utils.GetFFmpegPath(ctx)
+	if err != nil {
+		return err
+	}
+	headers := streamUrlInfo.HeadersForDownloader
+	ffUserAgent, exists := headers["User-Agent"]
+	if !exists {
+		ffUserAgent = userAgent
+	}
+	referer, exists := headers["Referer"]
+	if !exists {
+		referer = live.GetRawUrl()
+	}
+	args := []string{
 		"-nostats",
 		"-progress", "-",
 		"-y", "-re",
-		"-user_agent", userAgent,
-		"-referer", live.GetRawUrl(),
-		"-timeout", "60000000",
+		"-user_agent", ffUserAgent,
+		"-referer", referer,
+		"-rw_timeout", p.timeoutInUs,
 		"-i", url.String(),
 		"-c", "copy",
 		"-bsf:a", "aac_adtstoasc",
-		"-f", "flv",
-		file,
-	)
-	if p.cmdStdIn, err = p.cmd.StdinPipe(); err != nil {
+	}
+	for k, v := range headers {
+		if k == "User-Agent" || k == "Referer" {
+			continue
+		}
+		args = append(args, "-headers", k+": "+v)
+	}
+
+	inst := instance.GetInstance(ctx)
+	MaxFileSize := inst.Config.VideoSplitStrategies.MaxFileSize
+	if MaxFileSize < 0 {
+		inst.Logger.Infof("Invalid MaxFileSize: %d", MaxFileSize)
+	} else if MaxFileSize > 0 {
+		args = append(args, "-fs", strconv.Itoa(MaxFileSize))
+	}
+
+	args = append(args, file)
+
+	// p.cmd operations need p.cmdLock
+	func() {
+		p.cmdLock.Lock()
+		defer p.cmdLock.Unlock()
+		p.cmd = exec.Command(ffmpegPath, args...)
+		if p.cmdStdIn, err = p.cmd.StdinPipe(); err != nil {
+			return
+		}
+		if p.cmdStdout, err = p.cmd.StdoutPipe(); err != nil {
+			return
+		}
+		if p.debug {
+			p.cmd.Stderr = os.Stderr
+		}
+		if err = p.cmd.Start(); err != nil {
+			if p.cmd.Process != nil {
+				p.cmd.Process.Kill()
+			}
+			return
+		}
+	}()
+	if err != nil {
 		return err
 	}
-	if p.cmdStdout, err = p.cmd.StdoutPipe(); err != nil {
-		return err
-	}
-	if p.debug {
-		p.cmd.Stderr = os.Stderr
-	}
-	if err = p.cmd.Start(); err != nil {
-		p.cmd.Process.Kill()
-		return err
-	}
+
 	go p.scheduler()
-	return p.cmd.Wait()
+	err = p.cmd.Wait()
+	if err != nil {
+		return err
+	}
+	return nil
 }
 
-func (p *Parser) Stop() error {
+func (p *Parser) Stop() (err error) {
 	p.closeOnce.Do(func() {
-		if p.cmd.ProcessState == nil {
-			p.cmdStdIn.Write([]byte("q"))
+		p.cmdLock.Lock()
+		defer p.cmdLock.Unlock()
+		if p.cmd != nil && p.cmd.ProcessState == nil {
+			if p.cmdStdIn != nil && p.cmd.Process != nil {
+				if _, err = p.cmdStdIn.Write([]byte("q")); err != nil {
+					err = fmt.Errorf("error sending stop command to ffmpeg: %v", err)
+				}
+			} else if p.cmdStdIn == nil {
+				err = fmt.Errorf("p.cmdStdIn == nil")
+			} else if p.cmd.Process == nil {
+				err = fmt.Errorf("p.cmd.Process == nil")
+			}
 		}
 	})
-	return nil
+	return err
 }

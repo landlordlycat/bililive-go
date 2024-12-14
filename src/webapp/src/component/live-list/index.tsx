@@ -4,12 +4,14 @@ import PopDialog from '../pop-dialog/index';
 import AddRoomDialog from '../add-room-dialog/index';
 import API from '../../utils/api';
 import './live-list.css';
+import { RouteComponentProps } from "react-router-dom";
+import { ColumnProps } from 'antd/lib/table';
 
 const api = new API();
 
 const REFRESH_TIME = 3 * 60 * 1000;
 
-interface Props {
+interface Props extends RouteComponentProps {
     refresh?: () => void
 }
 
@@ -40,7 +42,7 @@ class LiveList extends React.Component<Props, IState> {
     //定时器
     timer!: NodeJS.Timeout;
 
-    runStatus = {
+    runStatus: ColumnProps<ItemData> = {
         title: '运行状态',
         key: 'tags',
         dataIndex: 'tags',
@@ -57,6 +59,9 @@ class LiveList extends React.Component<Props, IState> {
                     if (tag === '录制中') {
                         color = 'red';
                     }
+                    if (tag === '初始化') {
+                        color = 'orange';
+                    }
 
                     return (
                         <Tag color={color} key={tag}>
@@ -66,9 +71,21 @@ class LiveList extends React.Component<Props, IState> {
                 })}
             </span>
         ),
+        sorter: (a: ItemData, b: ItemData) => {
+            const isRecordingA = a.tags.includes('录制中');
+            const isRecordingB = b.tags.includes('录制中');
+            if (isRecordingA === isRecordingB) {
+                return 0;
+            } else if (isRecordingA) {
+                return 1;
+            } else {
+                return -1;
+            }
+        },
+        defaultSortOrder: 'descend',
     };
 
-    runAction = {
+    runAction: ColumnProps<ItemData> = {
         title: '操作',
         key: 'action',
         dataIndex: 'listening',
@@ -81,16 +98,22 @@ class LiveList extends React.Component<Props, IState> {
                             //停止监控
                             api.stopRecord(data.roomId)
                                 .then(rsp => {
+                                    api.saveSettingsInBackground();
                                     this.refresh();
+                                })
+                                .catch(err => {
+                                    alert(`停止监控失败:\n${err}`);
                                 });
-                            api.saveSettingsInBackground();
                         } else {
                             //开启监控
                             api.startRecord(data.roomId)
                                 .then(rsp => {
+                                    api.saveSettingsInBackground();
                                     this.refresh();
+                                })
+                                .catch(err => {
+                                    alert(`开启监控失败:\n${err}`);
                                 });
-                            api.saveSettingsInBackground();
                         }
                     }}>
                     <Button type="link" size="small">{listening ? "停止监控" : "开启监控"}</Button>
@@ -100,12 +123,19 @@ class LiveList extends React.Component<Props, IState> {
                     onConfirm={(e) => {
                         api.deleteRoom(data.roomId)
                             .then(rsp => {
+                                api.saveSettingsInBackground();
                                 this.refresh();
+                            })
+                            .catch(err => {
+                                alert(`删除直播间失败:\n${err}`);
                             });
-                            api.saveSettingsInBackground();
                     }}>
                     <Button type="link" size="small">删除</Button>
                 </PopDialog>
+                <Divider type="vertical" />
+                <Button type="link" size="small" onClick={(e) => {
+                    this.props.history.push(`/fileList/${data.address}/${data.name}`);
+                }}>文件</Button>
             </span>
         ),
     };
@@ -114,7 +144,10 @@ class LiveList extends React.Component<Props, IState> {
         {
             title: '主播名称',
             dataIndex: 'name',
-            key: 'name'
+            key: 'name',
+            sorter: (a: ItemData, b: ItemData) => {
+                return a.name.localeCompare(b.name);
+            },
         },
         {
             title: '直播间名称',
@@ -126,12 +159,15 @@ class LiveList extends React.Component<Props, IState> {
             title: '直播平台',
             dataIndex: 'address',
             key: 'address',
+            sorter: (a: ItemData, b: ItemData) => {
+                return a.address.localeCompare(b.address);
+            },
         },
         this.runStatus,
         this.runAction
     ];
 
-    smallColums = [
+    smallColumns = [
         {
             title: '主播名称',
             dataIndex: 'name',
@@ -186,6 +222,8 @@ class LiveList extends React.Component<Props, IState> {
                 } else {
                     alert("Server Error!");
                 }
+            }).catch(err => {
+                alert(`Server Error!:\n${err}`);
             })
     }
 
@@ -214,8 +252,12 @@ class LiveList extends React.Component<Props, IState> {
                         tags = ['已停止'];
                     }
 
-                    if (item.recoding === true) {
+                    if (item.recording === true) {
                         tags = ['录制中'];
+                    }
+
+                    if (item.initializing === true) {
+                        tags.push('初始化')
                     }
 
                     return {
@@ -236,10 +278,26 @@ class LiveList extends React.Component<Props, IState> {
                 this.setState({
                     list: data
                 });
+            })
+            .catch(err => {
+                alert(`加载列表数据失败:\n${err}`);
             });
     }
 
     render() {
+        const { list } = this.state;
+        this.columns.forEach((column: ColumnProps<ItemData>) => {
+            if (column.key === 'address') {
+                // 直播平台去重数组
+                const addressList = Array.from(new Set(list.map(item => item.address)));
+                column.filters = addressList.map(text => ({ text, value: text }));
+                column.onFilter = (value: string, record: ItemData) => record.address === value;
+            }
+            if (column.key === 'tags') {
+                column.filters = ['初始化', '监控中', '录制中', '已停止'].map(text => ({ text, value: text }));
+                column.onFilter = (value: string, record: ItemData) => record.tags.includes(value);
+            }
+        })
         return (
             <div>
                 <div style={{ backgroundColor: '#F5F5F5', }}>
@@ -256,11 +314,13 @@ class LiveList extends React.Component<Props, IState> {
                         ]}>
                     </PageHeader>
                 </div>
-                <Table className="item-pad" columns={
-                    (this.state.window.screen.width > 768) ? this.columns : this.smallColums}
+                <Table
+                    className="item-pad"
+                    columns={(this.state.window.screen.width > 768) ? this.columns : this.smallColumns}
                     dataSource={this.state.list}
                     size={(this.state.window.screen.width > 768) ? "default" : "middle"}
-                    pagination={false} />
+                    pagination={false}
+                />
             </div>
         );
     };

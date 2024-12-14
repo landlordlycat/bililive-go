@@ -2,7 +2,6 @@ package servers
 
 import (
 	"context"
-	"io/fs"
 	"net/http"
 	_ "net/http/pprof"
 
@@ -43,24 +42,49 @@ func initMux(ctx context.Context) *mux.Router {
 	apiRoute.HandleFunc("/info", getInfo).Methods("GET")
 	apiRoute.HandleFunc("/config", getConfig).Methods("GET")
 	apiRoute.HandleFunc("/config", putConfig).Methods("PUT")
+	apiRoute.HandleFunc("/raw-config", getRawConfig).Methods("GET")
+	apiRoute.HandleFunc("/raw-config", putRawConfig).Methods("PUT")
 	apiRoute.HandleFunc("/lives", getAllLives).Methods("GET")
 	apiRoute.HandleFunc("/lives", addLives).Methods("POST")
 	apiRoute.HandleFunc("/lives/{id}", getLive).Methods("GET")
 	apiRoute.HandleFunc("/lives/{id}", removeLive).Methods("DELETE")
 	apiRoute.HandleFunc("/lives/{id}/{action}", parseLiveAction).Methods("GET")
+	apiRoute.HandleFunc("/file/{path:.*}", getFileInfo).Methods("GET")
 	apiRoute.Handle("/metrics", promhttp.Handler())
 
-	fs, err := fs.Sub(webapp.FS, "build")
+	m.PathPrefix("/files/").Handler(
+		CORSMiddleware(
+			http.StripPrefix(
+				"/files/",
+				http.FileServer(
+					http.Dir(
+						instance.GetInstance(ctx).Config.OutPutPath,
+					),
+				),
+			),
+		),
+	)
+
+	fs, err := webapp.FS()
 	if err != nil {
 		instance.GetInstance(ctx).Logger.Fatal(err)
 	}
-	m.PathPrefix("/").Handler(http.FileServer(http.FS(fs)))
+	m.PathPrefix("/").Handler(http.FileServer(fs))
 
 	// pprof
 	if instance.GetInstance(ctx).Config.Debug {
 		m.PathPrefix("/debug/").Handler(http.DefaultServeMux)
 	}
 	return m
+}
+
+func CORSMiddleware(h http.Handler) http.Handler {
+    return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+        w.Header().Set("Access-Control-Allow-Origin", "*")
+        w.Header().Set("Access-Control-Allow-Methods", "POST, GET, OPTIONS, PUT, DELETE")
+        w.Header().Set("Access-Control-Allow-Headers", "Accept, Content-Type, Content-Length, Accept-Encoding, X-CSRF-Token, Authorization")
+        h.ServeHTTP(w, r)
+    })
 }
 
 func NewServer(ctx context.Context) *Server {

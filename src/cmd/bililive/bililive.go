@@ -6,6 +6,7 @@ import (
 	"net/url"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"syscall"
 	"time"
 
@@ -26,13 +27,6 @@ import (
 	"github.com/hr3lxphr6j/bililive-go/src/servers"
 )
 
-func init() {
-	if !utils.IsFFmpegExist() {
-		fmt.Fprintf(os.Stderr, "FFmpeg binary not found, Please Check.\n")
-		os.Exit(1)
-	}
-}
-
 func getConfig() (*configs.Config, error) {
 	var config *configs.Config
 	if *flag.Conf != "" {
@@ -44,7 +38,27 @@ func getConfig() (*configs.Config, error) {
 	} else {
 		config = flag.GenConfigFromFlags()
 	}
+	if !config.RPC.Enable && len(config.LiveRooms) == 0 {
+		// if config is invalid, try using the config.yml file besides the executable file.
+		config, err := getConfigBesidesExecutable()
+		if err == nil {
+			return config, config.Verify()
+		}
+	}
 	return config, config.Verify()
+}
+
+func getConfigBesidesExecutable() (*configs.Config, error) {
+	exePath, err := os.Executable()
+	if err != nil {
+		return nil, err
+	}
+	configPath := filepath.Join(filepath.Dir(exePath), "config.yml")
+	config, err := configs.NewConfigWithFile(configPath)
+	if err != nil {
+		return nil, err
+	}
+	return config, nil
 }
 
 func main() {
@@ -56,19 +70,33 @@ func main() {
 
 	inst := new(instance.Instance)
 	inst.Config = config
-	inst.Cache = gcache.New(128).LRU().Build()
+	// TODO: Replace gcache with hashmap.
+	// LRU seems not necessary here.
+	inst.Cache = gcache.New(1024).LRU().Build()
 	ctx := context.WithValue(context.Background(), instance.Key, inst)
 
 	logger := log.New(ctx)
 	logger.Infof("%s Version: %s Link Start", consts.AppName, consts.AppVersion)
+	if config.File != "" {
+		logger.Debugf("config path: %s.", config.File)
+		logger.Debugf("other flags have been ignored.")
+	} else {
+		logger.Debugf("config file is not used.")
+		logger.Debugf("flag: %s used.", os.Args)
+	}
 	logger.Debugf("%+v", consts.AppInfo)
 	logger.Debugf("%+v", inst.Config)
+
+	if !utils.IsFFmpegExist(ctx) {
+		logger.Fatalln("FFmpeg binary not found, Please Check.")
+	}
 
 	events.NewDispatcher(ctx)
 
 	inst.Lives = make(map[live.ID]live.Live)
-	for _, room := range inst.Config.LiveRooms {
-		u, err := url.Parse(room)
+	for index, _ := range inst.Config.LiveRooms {
+		room := &inst.Config.LiveRooms[index]
+		u, err := url.Parse(room.Url)
 		if err != nil {
 			logger.WithField("url", room).Error(err)
 			continue
@@ -77,6 +105,9 @@ func main() {
 		if v, ok := inst.Config.Cookies[u.Host]; ok {
 			opts = append(opts, live.WithKVStringCookies(u, v))
 		}
+		opts = append(opts, live.WithQuality(room.Quality))
+		opts = append(opts, live.WithAudioOnly(room.AudioOnly))
+
 		l, err := live.New(u, inst.Cache, opts...)
 		if err != nil {
 			logger.WithField("url", room).Error(err.Error())
@@ -87,6 +118,7 @@ func main() {
 			continue
 		}
 		inst.Lives[l.GetLiveId()] = l
+		room.LiveId = l.GetLiveId()
 	}
 
 	if inst.Config.RPC.Enable {
@@ -108,8 +140,15 @@ func main() {
 	}
 
 	for _, _live := range inst.Lives {
-		if err := lm.AddListener(ctx, _live); err != nil {
-			logger.WithFields(map[string]interface{}{"url": _live.GetRawUrl()}).Error(err)
+		room, err := inst.Config.GetLiveRoomByUrl(_live.GetRawUrl())
+		if err != nil {
+			logger.WithFields(map[string]interface{}{"room": _live.GetRawUrl()}).Error(err)
+			panic(err)
+		}
+		if room.IsListening {
+			if err := lm.AddListener(ctx, _live); err != nil {
+				logger.WithFields(map[string]interface{}{"url": _live.GetRawUrl()}).Error(err)
+			}
 		}
 		time.Sleep(time.Second * 5)
 	}

@@ -107,6 +107,21 @@ func (mr *MockLiveMockRecorder) GetRawUrl() *gomock.Call {
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetRawUrl", reflect.TypeOf((*MockLive)(nil).GetRawUrl))
 }
 
+// GetStreamInfos mocks base method.
+func (m *MockLive) GetStreamInfos() ([]*live.StreamUrlInfo, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "GetStreamInfos")
+	ret0, _ := ret[0].([]*live.StreamUrlInfo)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
+// GetStreamInfos indicates an expected call of GetStreamInfos.
+func (mr *MockLiveMockRecorder) GetStreamInfos() *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetStreamInfos", reflect.TypeOf((*MockLive)(nil).GetStreamInfos))
+}
+
 // GetStreamUrls mocks base method.
 func (m *MockLive) GetStreamUrls() ([]*url.URL, error) {
 	m.ctrl.T.Helper()
@@ -132,4 +147,16 @@ func (m *MockLive) SetLastStartTime(arg0 time.Time) {
 func (mr *MockLiveMockRecorder) SetLastStartTime(arg0 interface{}) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "SetLastStartTime", reflect.TypeOf((*MockLive)(nil).SetLastStartTime), arg0)
+}
+
+// SetLiveIdByString mocks base method.
+func (m *MockLive) SetLiveIdByString(arg0 string) {
+	m.ctrl.T.Helper()
+	m.ctrl.Call(m, "SetLiveIdByString", arg0)
+}
+
+// SetLiveIdByString indicates an expected call of SetLiveIdByString.
+func (mr *MockLiveMockRecorder) SetLiveIdByString(arg0 interface{}) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "SetLiveIdByString", reflect.TypeOf((*MockLive)(nil).SetLiveIdByString), arg0)
 }

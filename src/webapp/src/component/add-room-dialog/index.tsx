@@ -18,7 +18,9 @@ class AddRoomDialog extends React.Component<Props> {
 
     showModal = () => {
         this.setState({
+            ModalText: '请输入直播间的URL地址',
             visible: true,
+            confirmLoading: false,
         });
     };
 
@@ -27,33 +29,43 @@ class AddRoomDialog extends React.Component<Props> {
             ModalText: '正在添加直播间......',
             confirmLoading: true,
         });
-        
+
         api.addNewRoom(this.state.textView)
             .then((rsp) => {
+                // 保存设置
+                api.saveSettingsInBackground();
                 this.setState({
                     visible: false,
                     confirmLoading: false,
+                    textView:''
                 });
                 this.props.refresh();
             })
-        // 保存设置
-        api.saveSettingsInBackground();
+            .catch(err => {
+                alert(`添加直播间失败:\n${err}`);
+                this.setState({
+                    visible: false,
+                    confirmLoading: false,
+                    textView:''
+                });
+            })
     };
 
     handleCancel = () => {
         this.setState({
             visible: false,
+            textView:''
         });
     };
 
-    textChange = (e: any) =>{
+    textChange = (e: any) => {
         this.setState({
             textView: e.target.value
         })
     }
 
     render() {
-        const { visible, confirmLoading, ModalText } = this.state;
+        const { visible, confirmLoading, ModalText,textView } = this.state;
         return (
             <div>
                 <Modal
@@ -63,7 +75,7 @@ class AddRoomDialog extends React.Component<Props> {
                     confirmLoading={confirmLoading}
                     onCancel={this.handleCancel}>
                     <p>{ModalText}</p>
-                    <Input size="large" placeholder="https://" onChange={this.textChange}/>
+                    <Input size="large" value={textView} placeholder="https://" onChange={this.textChange} />
                 </Modal>
             </div>
         );

@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
+	"strconv"
 	"strings"
 	"text/template"
 	"time"
@@ -17,14 +18,14 @@ import (
 	"github.com/hr3lxphr6j/bililive-go/src/pkg/utils"
 
 	"github.com/robertkrimen/otto"
-	"github.com/satori/go.uuid"
+	uuid "github.com/satori/go.uuid"
 	"github.com/tidwall/gjson"
 )
 
 /*
-	From https://github.com/zhangn1985/ykdl
+From https://github.com/zhangn1985/ykdl
 
-	Thanks
+Thanks
 */
 const (
 	domain = "www.douyu.com"
@@ -151,14 +152,14 @@ func (l *Live) fetchRoomID() error {
 	var body []byte
 	resp, err := requests.Get(l.Url.String(), live.CommonUserAgent)
 	if err != nil {
-		goto ERROR
+		return errors.New("request failed. error: " + err.Error())
 	}
 	if resp.StatusCode != http.StatusOK {
-		goto ERROR
+		return errors.New("response code is " + strconv.Itoa(resp.StatusCode))
 	}
 	body, err = resp.Bytes()
 	if err != nil {
-		goto ERROR
+		return errors.New("failed to read response body. error: " + err.Error())
 	}
 	for _, reg := range douyuRoomIDRegs {
 		if str := utils.Match1(reg, string(body)); str != "" {
@@ -166,34 +167,61 @@ func (l *Live) fetchRoomID() error {
 			return nil
 		}
 	}
-	goto ERROR
-ERROR:
-	return errors.New("failed to fetch room id")
+	if strings.Contains(string(body), "该房间目前没有开放") {
+		errorMessage := "房间未开放"
+		return errors.New(errorMessage)
+	}
+	if strings.Contains(string(body), "您观看的房间已被关闭，请选择其他直播进行观看哦！") {
+		errorMessage := "房间被关闭"
+		return errors.New(errorMessage)
+	}
+	showedBodyMaxLength := 20
+	bodyLen := len(body)
+	if bodyLen < 20 {
+		showedBodyMaxLength = bodyLen
+	}
+	errorMessage := "unexcepted error. body: " + string(body[:showedBodyMaxLength])
+	if bodyLen > showedBodyMaxLength {
+		errorMessage += "... "
+	}
+	return errors.New(errorMessage)
 }
 
 func (l *Live) GetInfo() (info *live.Info, err error) {
 	if err := l.fetchRoomID(); err != nil {
-		return nil, err
+		if err.Error() == "房间未开放" {
+			return nil, errors.New("room not exists, fetchRoomID failed.")
+		} else if err.Error() == "房间被关闭" {
+			return &live.Info{
+				Live:     l,
+				HostName: "您观看的房间已被关闭",
+				RoomName: "您观看的房间已被关闭",
+				Status:   false,
+			}, nil
+		} else {
+			return nil, err
+		}
+
 	}
 	resp, err := requests.Get(fmt.Sprintf("%s/%s", liveInfoUrl, l.roomID), live.CommonUserAgent)
 	if err != nil {
 		return nil, err
 	}
 	if resp.StatusCode != http.StatusOK {
-		return nil, live.ErrRoomNotExist
+		return nil, errors.New(fmt.Sprintf("GetInfo() failed, response code: %d", resp.StatusCode))
 	}
 	body, err := resp.Bytes()
 	if err != nil {
 		return nil, err
 	}
 	info = &live.Info{
-		Live:     l,
-		HostName: gjson.GetBytes(body, "room.owner_name").String(),
-		RoomName: gjson.GetBytes(body, "room.room_name").String(),
-		Status:   gjson.GetBytes(body, "room.show_status").Int() == 1 && gjson.GetBytes(body, "room.videoLoop").Int() == 0,
+		Live:         l,
+		HostName:     gjson.GetBytes(body, "room.owner_name").String(),
+		RoomName:     gjson.GetBytes(body, "room.room_name").String(),
+		Status:       gjson.GetBytes(body, "room.show_status").Int() == 1 && gjson.GetBytes(body, "room.videoLoop").Int() == 0,
+		CustomLiveId: "douyu/" + l.roomID,
 	}
 	return info, nil
-
 }
 
 func (l *Live) getSignParams() (map[string]string, error) {
@@ -202,7 +230,7 @@ func (l *Live) getSignParams() (map[string]string, error) {
 		return nil, err
 	}
 	if resp.StatusCode != http.StatusOK {
-		return nil, live.ErrRoomNotExist
+		return nil, errors.New(fmt.Sprintf("getSignParams() failed, response code: %d", resp.StatusCode))
 	}
 	body, err := resp.Bytes()
 	if err != nil {
@@ -304,8 +332,8 @@ func (l *Live) GetStreamUrls() (us []*url.URL, err error) {
 	if err != nil {
 		return nil, err
 	}
-	if gjson.GetBytes(body, "error").Int() != 0 {
-		return nil, live.ErrRoomNotExist
+	if errorInt := gjson.GetBytes(body, "error").Int(); errorInt != 0 {
+		return nil, errors.New(fmt.Sprintf("GetStreamUrls() failed, error: %d", errorInt))
 	}
 	return utils.GenUrls(
 		fmt.Sprintf("%s/%s",

@@ -17,7 +17,11 @@ type BaseLive struct {
 }
 
 func genLiveId(url *url.URL) live.ID {
-	return live.ID(utils.GetMd5String([]byte(fmt.Sprintf("%s%s", url.Host, url.Path))))
+	return genLiveIdByString(fmt.Sprintf("%s%s", url.Host, url.Path))
+}
+
+func genLiveIdByString(value string) live.ID {
+	return live.ID(utils.GetMd5String([]byte(value)))
 }
 
 func NewBaseLive(url *url.URL, opt ...live.Option) BaseLive {
@@ -26,6 +30,10 @@ func NewBaseLive(url *url.URL, opt ...live.Option) BaseLive {
 		LiveId:  genLiveId(url),
 		Options: live.MustNewOptions(opt...),
 	}
+}
+
+func (a *BaseLive) SetLiveIdByString(value string) {
+	a.LiveId = genLiveIdByString(value)
 }
 
 func (a *BaseLive) GetLiveId() live.ID {
@@ -42,4 +50,14 @@ func (a *BaseLive) GetLastStartTime() time.Time {
 
 func (a *BaseLive) SetLastStartTime(time time.Time) {
 	a.LastStartTime = time
+}
+
+// TODO: remove this method
+func (a *BaseLive) GetStreamUrls() ([]*url.URL, error) {
+	return nil, live.ErrNotImplemented
+}
+
+// TODO: remove this method
+func (a *BaseLive) GetStreamInfos() ([]*live.StreamUrlInfo, error) {
+	return nil, live.ErrNotImplemented
 }
